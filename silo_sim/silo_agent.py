@@ -32,29 +32,10 @@ Token tracking
   a shared counter dict that you pass to SiloBenchAgent.token_counter.
   If token_counter is None, output tokens are estimated as word count.
 
-GNN state keys
---------------
-  After every decide() call the agent writes the following keys into its
-  .state dict so that AgentStateExtractor can assemble a GNNAgentState
-  tensor for the GNNEdgeMaskRouter:
-
-  ``"gnn_solution_embed"``   list[float] of length embed_dim_sol
-  ``"gnn_uncertainty"``      float ∈ [0, 1]  (0 = certain / submitted)
-  ``"gnn_inbound_embed"``    list[float] of length embed_dim_ctx
-  ``"gnn_staleness"``        int  rounds since last non-empty inbox
-  ``"gnn_tokens"``           float  cumulative output-token count
-  ``"gnn_prev_out_degree"``  float  messages sent in the *previous* round
-
-  By default, text embeddings are produced by a lightweight deterministic
-  hash function that requires no external model.  Pass a custom ``embed_fn``
-  (signature: ``(text: str) -> list[float]``) to use a real embedding model
-  instead.  The agent pads or truncates the returned vector to the configured
-  dimension automatically.
 """
 
 from __future__ import annotations
 
-import hashlib
 import json
 from dataclasses import dataclass, field
 from typing import Any, Callable
@@ -63,28 +44,9 @@ from silo_sim.agent import SimMessage
 from silo_sim.utils.parsing import parse_tool_calls
 
 LLMFn = Callable[[list[dict[str, str]]], str]
-EmbedFn = Callable[[str], list[float]]
 
 # Tools that immediately end the agent's turn for this round.
 _TERMINAL_TOOLS = {"wait", "submit_result"}
-
-
-def _hash_embed(text: str, dim: int) -> list[float]:
-    """Deterministic text → float vector via MD5 chunking.
-
-    Produces a reproducible, bounded vector in [-0.5, 0.5]^dim that
-    captures text identity (same text → same vector) without any ML
-    model.  Useful as a zero-dependency default; swap for a real
-    embedding model via the ``embed_fn`` parameter when signal quality
-    matters.
-    """
-    if not text:
-        return [0.0] * dim
-    out = []
-    for i in range(dim):
-        raw = hashlib.md5(f"{i}:{text}".encode()).hexdigest()
-        out.append(int(raw, 16) % 10000 / 10000.0 - 0.5)
-    return out
 
 
 @dataclass
@@ -108,17 +70,6 @@ class SiloBenchAgent:
     token_counter:
         Optional callable(raw_response: str) -> int that returns output token
         count for the C metric.  If None, word count is used as a proxy.
-    embed_dim_sol:
-        Dimension of the ``gnn_solution_embed`` vector.  Must match ``d_sol``
-        passed to ``make_gnn_topology_hook()``.  Default 16.
-    embed_dim_ctx:
-        Dimension of the ``gnn_inbound_embed`` vector.  Must match ``d_ctx``
-        passed to ``make_gnn_topology_hook()``.  Default 16.
-    embed_fn:
-        Optional ``(text: str) -> list[float]`` embedding function.  When
-        provided it is used for both solution and context embeddings; the
-        returned vector is padded or truncated to the respective dim.  When
-        None, a deterministic hash-based encoder is used.
     """
 
     agent_id: int
@@ -129,11 +80,6 @@ class SiloBenchAgent:
     num_agents: int
     token_counter: Callable[[str], int] | None = None
 
-    # GNN embedding config
-    embed_dim_sol: int = 16
-    embed_dim_ctx: int = 16
-    embed_fn: EmbedFn | None = None
-
     # Internal mutable fields (not part of the constructor signature the user cares about)
     _state: dict[str, Any] = field(default_factory=dict, repr=False)
     _inbox: list[SimMessage] = field(default_factory=list, repr=False)
@@ -143,13 +89,8 @@ class SiloBenchAgent:
     _output_tokens: int = field(default=0, repr=False)
     _messages_sent: int = field(default=0, repr=False)
 
-    # GNN feature tracking
-    _staleness: int = field(default=0, repr=False)
-    _prev_round_out_degree: int = field(default=0, repr=False)
     _last_response: str = field(default="", repr=False)
     # inbox text captured in observe(), before decide() clears _inbox
-    _current_inbox_text: str = field(default="", repr=False)
-    _inbox_was_nonempty: bool = field(default=False, repr=False)
 
     # Routing (set each round by silo_sim.routing.RoutingController).
     # allowed_targets=None means unrestricted; enforce=True bounces sends to
@@ -178,10 +119,6 @@ class SiloBenchAgent:
     def observe(self, messages: list[SimMessage]) -> None:
         """Called by Simulator at the start of each round."""
         self._inbox = list(messages)
-        # Capture inbox features now; decide() clears _inbox before
-        # _update_gnn_state() runs.
-        self._inbox_was_nonempty = bool(messages)
-        self._current_inbox_text = " ".join(str(m.content) for m in messages)
         if not self._submitted:  # submitted agents are inert and receive nothing (paper A.5)
             for m in messages:
                 self._known |= m.known | {m.sender_id}
@@ -192,7 +129,6 @@ class SiloBenchAgent:
         if self._submitted:
             self._inbox = []
             self._state["sent_to"] = []
-            self._update_gnn_state(outbound_count=0)
             return []
 
         if self.protocol == "sfs":
@@ -235,88 +171,11 @@ class SiloBenchAgent:
         self._inbox = []
         self._round += 1
 
-        # Refresh GNN features for the topology hook at the top of next round
-        self._update_gnn_state(outbound_count=len(outbound))
-
         return outbound
 
     @property
     def state(self) -> dict[str, Any]:
         return self._state
-
-    # ------------------------------------------------------------------
-    # GNN features
-    # ------------------------------------------------------------------
-
-    def _embed(self, text: str, dim: int) -> list[float]:
-        """Embed *text* into a float vector of exactly *dim* elements.
-
-        Uses the custom embed_fn if provided, otherwise the deterministic
-        hash encoder.  Always pads or truncates to exactly *dim* floats.
-        """
-        if self.embed_fn is not None:
-            raw = list(self.embed_fn(text))
-        else:
-            raw = _hash_embed(text, dim)
-        if len(raw) < dim:
-            raw = raw + [0.0] * (dim - len(raw))
-        return raw[:dim]
-
-    def _update_gnn_state(self, outbound_count: int) -> None:
-        """Write GNN routing features into self._state after each decide().
-
-        Called at the end of every decide() turn so that AgentStateExtractor
-        always sees an up-to-date snapshot when the topology hook fires at
-        the top of the next round.
-
-        Features written
-        ----------------
-        gnn_solution_embed  : Embedding of the agent's current best answer
-                              (submission text when submitted, otherwise the
-                              most recent LLM response).
-        gnn_uncertainty     : 0.0 when submitted; otherwise an inverse-progress
-                              heuristic that shrinks as conversation grows.
-        gnn_inbound_embed   : Embedding of this round's inbox (captured before
-                              the inbox was cleared).  Zeros if inbox was empty.
-        gnn_staleness       : Rounds elapsed since last non-empty inbox.
-        gnn_tokens          : Cumulative output-token count.
-        gnn_prev_out_degree : Out-degree from the *previous* round.
-        """
-        # Solution embedding
-        if self._submitted and self._state.get("submission"):
-            solution_text = str(self._state["submission"].get("answer", ""))
-        else:
-            solution_text = self._last_response
-        self._state["gnn_solution_embed"] = self._embed(solution_text, self.embed_dim_sol)
-
-        # Uncertainty
-        if self._submitted:
-            uncertainty = 0.0
-        else:
-            # Each turn adds an assistant + tool-result entry to _history;
-            # uncertainty decays with turns, floored at 0.1.
-            turns = len(self._history) // 2
-            uncertainty = max(0.1, 1.0 / (1.0 + 0.5 * turns))
-        self._state["gnn_uncertainty"] = uncertainty
-
-        # Inbound context embedding + staleness
-        if self._inbox_was_nonempty:
-            self._state["gnn_inbound_embed"] = self._embed(
-                self._current_inbox_text, self.embed_dim_ctx
-            )
-            self._staleness = 0
-        else:
-            if "gnn_inbound_embed" not in self._state:
-                self._state["gnn_inbound_embed"] = [0.0] * self.embed_dim_ctx
-            self._staleness += 1
-        self._state["gnn_staleness"] = self._staleness
-
-        # Token count
-        self._state["gnn_tokens"] = float(self._output_tokens)
-
-        # Out-degree: publish last round's, then remember this round's
-        self._state["gnn_prev_out_degree"] = float(self._prev_round_out_degree)
-        self._prev_round_out_degree = outbound_count
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -475,11 +334,7 @@ class SiloBenchAgent:
         self._round = 0
         self._output_tokens = 0
         self._messages_sent = 0
-        self._staleness = 0
-        self._prev_round_out_degree = 0
         self._last_response = ""
-        self._current_inbox_text = ""
-        self._inbox_was_nonempty = False
         self._bounced = self._sends_routed = self._sends_on_route = 0
         self._route_offered = self._route_used = 0
         self._rejected = None

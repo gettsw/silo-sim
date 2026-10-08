@@ -18,9 +18,6 @@ Built-in stubs (bodies raise NotImplementedError)
 AnswerVerifier      — checks per-agent submission against expected output
 ConsistencyVerifier — checks that agent beliefs are mutually consistent
 
-Planned (not yet stubbed)
--------------------------
-GNSVerifier         — validates GNN scoring confidence against ground truth
 """
 
 from __future__ import annotations

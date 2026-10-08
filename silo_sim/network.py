@@ -80,7 +80,7 @@ class Network:
         """Queue a message for delivery next round.
 
         Silently drops the message if recipient is not a valid neighbor of sender.
-        This allows the GNN topology hook to zero out edges without crashing
+        This allows topology hooks to zero out edges without crashing
         agents that still attempt to broadcast to all peers.
         """
         neighbors = self.topology.get(msg.sender_id, set())
@@ -129,7 +129,7 @@ class Network:
     def update_adjacency(self, new_adj: dict[int, list[int]]) -> None:
         """Replace topology entries in-place from a new adjacency mapping.
 
-        Used by topology hooks (e.g. GNNTopologyHook) to rewrite the graph
+        Used by topology hooks to rewrite the graph
         each round without constructing a new Network object.
 
         Parameters
