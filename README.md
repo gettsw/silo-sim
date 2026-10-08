@@ -6,7 +6,7 @@
 
 Agents exchange messages over an explicit network, a simulator drives the clock, and verifiers check the outcome.
 
-[![License: Unlicense](https://img.shields.io/badge/license-Unlicense-blue.svg)](LICENSE)
+[![License: Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
 [![Paper](https://img.shields.io/badge/arXiv-2603.01045-b31b1b.svg)](https://arxiv.org/abs/2603.01045)
 
@@ -174,4 +174,4 @@ If you use the SILO-BENCH environment in your work, please cite the paper:
 
 ## License
 
-Released into the public domain under the [Unlicense](LICENSE).
+Licensed under the [Apache License 2.0](LICENSE).
