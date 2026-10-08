@@ -10,7 +10,8 @@ pip install -e .
 python examples/quickstart.py   # run from the repo root
 ```
 
-```pythonimport random
+```python
+import random
 
 from silo_sim import Network, RuleAgent, SimMessage, Simulator, make_mock_fn, run_silo_case
 
@@ -42,6 +43,8 @@ Expected output:
 {0: 40, 1: 40, 2: 40, 3: 40, 4: 40}
 [I-01 | broadcast] rounds=3 all_submitted=False S=0.000 P=0.000 C=2.0 D=0.000
 ```
+
+## Modules
 
 - `silo_sim.agent` / `llm_agent` / `silo_agent` — agent protocol, rule agents, LLM agents, SILO-BENCH agent
 - `silo_sim.network` — topology + message delivery (loss, latency, ring/star/full/custom)
