@@ -1,7 +1,28 @@
 # silo-sim
 
-A small round-based multi-agent simulation SDK: agents â†’ network â†’ simulator â†’ verifiers.
-Extracted from the [SILO-BENCH](https://arxiv.org/abs/2603.01045) environment.
+A small, dependency-light SDK for **round-based multi-agent simulation**: agents exchange messages over an explicit network, a simulator drives the clock, and verifiers check the results. Extracted from the [SILO-BENCH](https://arxiv.org/abs/2603.01045) environment for evaluating coordination among LLM agents that each hold a private data shard.
+
+## Features
+
+- **Agents** — a tiny `BaseAgent` protocol (`observe` / `decide` / `state`) with rule-based, LLM-backed and SILO-BENCH implementations. Bring your own LLM via a plain `llm_fn(messages) -> str`.
+- **Network** — explicit topology (ring, star, fully connected, custom edges), seeded packet loss, and an optional message filter.
+- **Simulator** — synchronous rounds (deliver, observe, decide, send) with per-round history, plus epoch-based runs with a verifier between epochs.
+- **Verification** — pluggable verifiers (`PassVerifier`, `FnVerifier`, `AnswerVerifier`, `ConsistencyVerifier`) and a neuro-symbolic `NSVerifier` that checks messages and submissions against task invariants.
+- **Routing** — rule-based routers (full, star, chain, random, gossip) to restrict who may message whom each round.
+- **SILO-BENCH runner** — `run_silo_case` runs a benchmark case end to end and reports success (S), partial correctness (P), tokens per round (C) and communication density (D).
+- **A2A adapter** — convert `SimMessage` to and from A2A message dicts.
+- **Reproducible** — everything random takes a seed; LLM calls can be mocked, so tests need no API key.
+
+## Install
+
+Requires Python 3.10+.
+
+```bash
+git clone <this-repo-url> && cd silo-sim
+pip install -e .
+```
+
+For real LLM runs, pass `make_openai_fn(...)` (any OpenAI-compatible endpoint) as `llm_fn`; see `configs/config.example.yaml` for the settings it reads.
 
 ## Quickstart
 
@@ -46,16 +67,30 @@ Expected output:
 
 ## Modules
 
-- `silo_sim.agent` / `llm_agent` / `silo_agent` â€” agent protocol, rule agents, LLM agents, SILO-BENCH agent
-- `silo_sim.network` â€” topology + message delivery (loss, latency, ring/star/full/custom)
-- `silo_sim.simulator` â€” rounds and epochs
-- `silo_sim.verification` / `ns_verifier` / `msg_filter` â€” verification layer between epochs
-- `silo_sim.routing` â€” rule-based routers (full, star, chain, random, gossip)
-- `silo_sim.a2a` â€” SimMessage â†” A2A message adapter
-- `silo_sim.silo_runner` â€” `run_silo_case` on SILO-BENCH case files (samples in `benchmarks/`)
+| Module | Purpose |
+|---|---|
+| `silo_sim.agent`, `llm_agent`, `silo_agent` | Agent protocol, rule agents, LLM agents, SILO-BENCH agent |
+| `silo_sim.network` | Topology, message queue and delivery, packet loss |
+| `silo_sim.simulator` | Rounds, epochs, step history |
+| `silo_sim.verification`, `ns_verifier`, `msg_filter` | Verification layer and message filters |
+| `silo_sim.routing` | Rule-based routers |
+| `silo_sim.a2a` | SimMessage and A2A message adapter |
+| `silo_sim.adapters` | `make_openai_fn`, `make_mock_fn` |
+| `silo_sim.silo_runner` | `run_silo_case` and `SiloResult` |
+
+Sample SILO-BENCH cases (N=2 and N=5) live in `benchmarks/`; the full benchmark and generator are in the upstream SILO-BENCH repository.
+
+## Development
 
 ```bash
-pip install -e ".[dev]" && pytest
+pip install -e ".[dev]"
+pytest
 ```
 
-Unlicense (public domain).
+## Citation
+
+If you use the SILO-BENCH environment, please cite the paper: <https://arxiv.org/abs/2603.01045>.
+
+## License
+
+[Unlicense](LICENSE) (public domain).
