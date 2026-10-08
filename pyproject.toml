@@ -1,0 +1,14 @@
+[project]
+name = "silo-sim"
+version = "0.1.0"
+description = "Round-based multi-agent simulation SDK: agents, networks, verifiers, and the SILO-BENCH runner"
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "Unlicense"}
+dependencies = ["openai>=2.8.1", "httpx", "pydantic>=2.0.0", "pyyaml>=6.0", "tenacity>=9.1.4"]
+
+[project.optional-dependencies]
+dev = ["pytest"]
+
+[tool.setuptools]
+packages = ["silo_sim", "silo_sim.utils"]
