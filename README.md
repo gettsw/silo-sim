@@ -1,34 +1,64 @@
+<div align="center">
+
 # silo-sim
 
-A small, dependency-light SDK for **round-based multi-agent simulation**: agents exchange messages over an explicit network, a simulator drives the clock, and verifiers check the results. Extracted from the [SILO-BENCH](https://arxiv.org/abs/2603.01045) environment for evaluating coordination among LLM agents that each hold a private data shard.
+**A lightweight SDK for round-based multi-agent simulation.**
+
+Agents exchange messages over an explicit network, a simulator drives the clock, and verifiers check the outcome.
+
+[![License: Unlicense](https://img.shields.io/badge/license-Unlicense-blue.svg)](LICENSE)
+[![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
+[![Paper](https://img.shields.io/badge/arXiv-2603.01045-b31b1b.svg)](https://arxiv.org/abs/2603.01045)
+
+</div>
+
+---
+
+## Overview
+
+`silo-sim` is the simulation core of [SILO-BENCH](https://arxiv.org/abs/2603.01045), a benchmark for distributed coordination among LLM agents that each hold a private data shard. It is packaged as a standalone SDK so you can build, run, and verify your own multi-agent experiments, with or without an LLM.
+
+The design goals are:
+
+- **Small surface area.** An agent is three methods: `observe`, `decide`, `state`.
+- **Explicit communication.** Who can talk to whom is a first-class `Network` object, not an implicit side effect.
+- **Provider-agnostic.** LLM calls go through a plain `llm_fn(messages) -> str`; swap providers or mock them freely.
+- **Reproducible.** Every source of randomness takes a seed, and runs need no API key when mocked.
 
 ## Features
 
-- **Agents** � a tiny `BaseAgent` protocol (`observe` / `decide` / `state`) with rule-based, LLM-backed and SILO-BENCH implementations. Bring your own LLM via a plain `llm_fn(messages) -> str`.
-- **Network** � explicit topology (ring, star, fully connected, custom edges), seeded packet loss, and an optional message filter.
-- **Simulator** � synchronous rounds (deliver, observe, decide, send) with per-round history, plus epoch-based runs with a verifier between epochs.
-- **Verification** � pluggable verifiers (`PassVerifier`, `FnVerifier`, `AnswerVerifier`, `ConsistencyVerifier`) and a neuro-symbolic `NSVerifier` that checks messages and submissions against task invariants.
-- **Routing** � rule-based routers (full, star, chain, random, gossip) to restrict who may message whom each round.
-- **SILO-BENCH runner** � `run_silo_case` runs a benchmark case end to end and reports success (S), partial correctness (P), tokens per round (C) and communication density (D).
-- **A2A adapter** � convert `SimMessage` to and from A2A message dicts.
-- **Reproducible** � everything random takes a seed; LLM calls can be mocked, so tests need no API key.
+| Area | What you get |
+|---|---|
+| **Agents** | `BaseAgent` protocol, `RuleAgent` (policy function), `LLMAgent`, and `SiloBenchAgent` |
+| **Network** | Ring, star, fully connected, and custom-edge topologies; seeded packet loss; optional message filter |
+| **Simulator** | Synchronous rounds (deliver → observe → decide → send), step history, and epoch runs with a verifier between epochs |
+| **Verification** | `PassVerifier`, `FnVerifier`, `AnswerVerifier`, `ConsistencyVerifier`, and a neuro-symbolic `NSVerifier` |
+| **Routing** | Rule-based routers: `full`, `star`, `chain`, `random`, `gossip` |
+| **Benchmark runner** | `run_silo_case` executes a SILO-BENCH case and reports S, P, C, D (see [Metrics](#metrics)) |
+| **Interop** | `SimMessage` ↔ A2A message adapter |
 
-## Install
+## Installation
 
-Requires Python 3.10+.
+Requires Python 3.10 or newer.
 
 ```bash
-git clone <this-repo-url> && cd silo-sim
+git clone https://github.com/gettsw/silo-sim.git
+cd silo-sim
 pip install -e .
 ```
 
-For real LLM runs, pass `make_openai_fn(...)` (any OpenAI-compatible endpoint) as `llm_fn`; see `configs/config.example.yaml` for the settings it reads.
+With development tools (pytest):
+
+```bash
+pip install -e ".[dev]"
+```
 
 ## Quickstart
 
+Run it from the repository root (no API key required):
+
 ```bash
-pip install -e .
-python examples/quickstart.py   # run from the repo root
+python examples/quickstart.py
 ```
 
 ```python
@@ -55,7 +85,7 @@ print({i: sim.agent_state(i)["max"] for i in ids})  # every value is 40
 # --- 2. A SILO-BENCH case driven by a scripted (mock) LLM --------------------
 llm = make_mock_fn(["<tool_call><tool>wait</tool><parameters></parameters></tool_call>"])
 result = run_silo_case("benchmarks/I-01_n2.json", "broadcast", llm, max_rounds=3)
-print(result.summary() if hasattr(result, "summary") else result)
+print(result.summary())
 ```
 
 Expected output:
@@ -65,20 +95,69 @@ Expected output:
 [I-01 | broadcast] rounds=3 all_submitted=False S=0.000 P=0.000 C=2.0 D=0.000
 ```
 
-## Modules
+> The mock agent only calls `wait`, so the case is not solved (S = 0). The example demonstrates the runner, not a solved task.
 
-| Module | Purpose |
+## Core concepts
+
+### Simulation loop
+
+Each round the simulator performs, in order:
+
+1. `Network.deliver()` pushes queued messages into per-agent inboxes.
+2. Every agent `observe`s its inbox. All agents observe before any agent decides, so results do not depend on iteration order.
+3. Every agent `decide`s and emits messages.
+4. Emitted messages are queued with `Network.send()` for the next round.
+
+### Agents
+
+Anything with `observe(messages)`, `decide() -> list[SimMessage]`, and a `state` dict satisfies `BaseAgent`. Use `RuleAgent` for hand-written policies and `LLMAgent` / `SiloBenchAgent` for LLM-driven behavior.
+
+### Using a real LLM
+
+Pass any callable that takes OpenAI-style chat messages and returns a string. For OpenAI-compatible endpoints:
+
+```python
+from silo_sim import make_openai_fn
+
+llm = make_openai_fn(...)   # see configs/config.example.yaml for the settings it reads
+```
+
+### Metrics
+
+`run_silo_case` returns a `SiloResult` with:
+
+| Metric | Meaning |
 |---|---|
-| `silo_sim.agent`, `llm_agent`, `silo_agent` | Agent protocol, rule agents, LLM agents, SILO-BENCH agent |
-| `silo_sim.network` | Topology, message queue and delivery, packet loss |
-| `silo_sim.simulator` | Rounds, epochs, step history |
-| `silo_sim.verification`, `ns_verifier`, `msg_filter` | Verification layer and message filters |
-| `silo_sim.routing` | Rule-based routers |
-| `silo_sim.a2a` | SimMessage and A2A message adapter |
-| `silo_sim.adapters` | `make_openai_fn`, `make_mock_fn` |
-| `silo_sim.silo_runner` | `run_silo_case` and `SiloResult` |
+| `S` | Success rate in [0, 1] |
+| `P` | Partial correctness in [0, 1] |
+| `C` | Average output tokens per round |
+| `D` | Communication density (may exceed 1) |
 
-Sample SILO-BENCH cases (N=2 and N=5) live in `benchmarks/`; the full benchmark and generator are in the upstream SILO-BENCH repository.
+It also exposes `rounds_run`, `all_submitted`, `submissions`, and the full step history in `steps`.
+
+## Project layout
+
+```
+silo_sim/
+├── agent.py            # BaseAgent protocol, RuleAgent, SimMessage
+├── llm_agent.py        # LLM-backed agent
+├── silo_agent.py       # SILO-BENCH agent
+├── network.py          # Topology, delivery, packet loss
+├── simulator.py        # Rounds, epochs, history
+├── verification.py     # Verifier protocol and built-in verifiers
+├── ns_verifier.py      # Neuro-symbolic verifier
+├── msg_filter.py       # Message filter rules
+├── routing.py          # Rule-based routers
+├── a2a.py              # A2A message adapter
+├── adapters.py         # make_openai_fn, make_mock_fn
+├── silo_runner.py      # run_silo_case, SiloResult
+└── utils/              # Config, LLM client, metrics, parsing, prompts
+benchmarks/             # Sample SILO-BENCH cases (N=2 and N=5)
+examples/quickstart.py
+tests/
+```
+
+The full benchmark and case generator live in the upstream SILO-BENCH repository.
 
 ## Development
 
@@ -89,8 +168,10 @@ pytest
 
 ## Citation
 
-If you use the SILO-BENCH environment, please cite the paper: <https://arxiv.org/abs/2603.01045>.
+If you use the SILO-BENCH environment in your work, please cite the paper:
+
+> *SILO-BENCH: A Scalable Environment for Evaluating Distributed Coordination in Multi-Agent LLM Systems.* arXiv:2603.01045. <https://arxiv.org/abs/2603.01045>
 
 ## License
 
-[Unlicense](LICENSE) (public domain).
+Released into the public domain under the [Unlicense](LICENSE).
